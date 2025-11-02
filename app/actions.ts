@@ -144,17 +144,20 @@ export async function createRoom(request: CreateRoomRequest): Promise<CreateRoom
     console.log('✅ [SERVER] Room created successfully!')
     console.log('📦 [SERVER] Room data:', JSON.stringify(room, null, 2))
 
+    // Type assertion for room
+    const roomRecord = room as any
+
     // Insert default questions if none provided
     const questionsToInsert = request.questions && request.questions.length > 0
       ? request.questions.map(q => ({
-          room_id: room.id,
+          room_id: roomRecord.id,
           round_number: q.round_number,
           question_number: q.question_number,
           stem: q.stem,
           choices: q.choices as any,
           scavenger_instruction: q.scavenger_instruction,
         }))
-      : generateDefaultQuestions(room.id, request.settings)
+      : generateDefaultQuestions(roomRecord.id, request.settings)
 
     const { error: questionsError } = await supabaseAdmin
       .from('questions')
@@ -166,7 +169,7 @@ export async function createRoom(request: CreateRoomRequest): Promise<CreateRoom
     }
 
     return {
-      room: room as any,
+      room: roomRecord,
       host_key: hostKey,
     }
   } catch (error) {
