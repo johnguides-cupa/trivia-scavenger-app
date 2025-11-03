@@ -29,6 +29,7 @@ export default function PlayerRoom() {
   const [showCountdown, setShowCountdown] = useState(false)
   const [countdownValue, setCountdownValue] = useState(3)
   const [hostConnectionStatus, setHostConnectionStatus] = useState<'connected' | 'slow' | 'disconnected'>('connected')
+  const [pointsEarned, setPointsEarned] = useState<number | null>(null)
 
   // Convert questionStartTime (timestamp) to ISO string for the timer hook
   const questionStartTimeISO = questionStartTime ? new Date(questionStartTime).toISOString() : null
@@ -170,6 +171,7 @@ export default function PlayerRoom() {
           const alreadyAnswered = localStorage.getItem(hasAnsweredKey)
           setHasAnswered(!!alreadyAnswered)
           setSelectedAnswer(null)
+          setPointsEarned(null) // Reset points earned for new question
           
           // Start 3-second countdown for new trivia questions (not for review)
           if (gameState?.status === 'trivia' && !alreadyAnswered) {
@@ -251,7 +253,7 @@ export default function PlayerRoom() {
     })
 
     try {
-      await submitAnswer({
+      const result = await submitAnswer({
         room_id: room.id,
         player_id: currentPlayer.id,
         question_id: currentQuestion.id,
@@ -260,6 +262,12 @@ export default function PlayerRoom() {
       })
 
       setHasAnswered(true)
+      
+      // Store points earned for this question
+      if (result?.points !== undefined) {
+        setPointsEarned(result.points)
+        console.log('✅ [PLAYER] Points earned:', result.points)
+      }
       
       // Save that we answered this question in localStorage
       if (typeof window !== 'undefined') {
@@ -514,6 +522,12 @@ export default function PlayerRoom() {
               <div className="text-right">
                 <p className="text-sm text-gray-400">You are</p>
                 <p className="text-xl font-bold text-purple-400">{currentPlayer.display_name}</p>
+                <div className="mt-2 px-4 py-2 bg-gradient-to-r from-purple-900/30 to-pink-900/30 border border-purple-500/30 rounded-lg">
+                  <p className="text-xs text-gray-400">Total Score</p>
+                  <p className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">
+                    {currentPlayer.points || 0}
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -696,7 +710,18 @@ export default function PlayerRoom() {
                 <div className="text-center py-8">
                   <div className="text-6xl mb-4">✓</div>
                   <h3 className="text-2xl font-bold text-green-400 mb-2">Answer Submitted!</h3>
-                  <p className="text-gray-400">
+                  
+                  {/* Show points earned */}
+                  {pointsEarned !== null && (
+                    <div className="mt-4 inline-block px-6 py-3 bg-gradient-to-r from-purple-900/50 to-pink-900/50 border border-purple-500/50 rounded-lg">
+                      <p className="text-sm text-gray-400 mb-1">Points Earned</p>
+                      <p className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">
+                        +{pointsEarned}
+                      </p>
+                    </div>
+                  )}
+                  
+                  <p className="text-gray-400 mt-4">
                     Waiting for other players...
                   </p>
                 </div>
