@@ -41,10 +41,11 @@ export default function PlayerRoom() {
   const isFinished = gameState?.status === 'finished'
 
   // Timer for trivia question - MUST be called unconditionally
+  // Uses player's local questionStartTime for fair scoring (each player's timer starts when THEY see the question)
   const triviaTimer = useGameTimer({
-    startTime: gameState?.question_start_time || null,
+    startTime: questionStartTime ? new Date(questionStartTime).toISOString() : null,
     duration: settings?.time_per_trivia_question || 30,
-    enabled: isTrivia && !!currentQuestion && !hasAnswered && !!room && !showCountdown,
+    enabled: isTrivia && !!currentQuestion && !hasAnswered && !!room && !showCountdown && !!questionStartTime,
     onComplete: () => {
       // Time's up - mark as answered even if they didn't submit
       if (!hasAnswered) {
@@ -173,10 +174,8 @@ export default function PlayerRoom() {
             setCountdownValue(3)
           }
           
-          // Set question start time for time-based scoring (only if not already answered)
-          if (!alreadyAnswered) {
-            setQuestionStartTime(Date.now())
-          }
+          // Timer will start when question finishes loading (in loadCurrentQuestion)
+          // NOT here - this ensures each player's timer starts when THEY see the question
           
           localStorage.setItem(`last_question_${updatedRoom.id}`, questionKey)
         }
@@ -196,6 +195,17 @@ export default function PlayerRoom() {
       if (response.ok) {
         const data = await response.json()
         setCurrentQuestion(data.question)
+        
+        // Start timer NOW when question actually loads on this player's device
+        // This ensures fair scoring regardless of connection speed
+        const questionKey = `${round}-${questionNum}`
+        const hasAnsweredKey = `answered_${roomId}_${questionKey}`
+        const alreadyAnswered = localStorage.getItem(hasAnsweredKey)
+        
+        if (!alreadyAnswered) {
+          setQuestionStartTime(Date.now())
+          console.log('⏱️ [PLAYER] Timer started - question loaded on device')
+        }
       }
     } catch (error) {
       console.error('Failed to load question:', error)
@@ -598,6 +608,7 @@ export default function PlayerRoom() {
               {/* Timer - only show when countdown is finished */}
               {!hasAnswered && !showCountdown && (
                 <div className="mb-6">
+                  <div className="text-xs text-gray-500 text-center mb-1">Your Time</div>
                   <Timer 
                     seconds={triviaTimer.secondsLeft}
                     totalSeconds={triviaTimer.totalSeconds}

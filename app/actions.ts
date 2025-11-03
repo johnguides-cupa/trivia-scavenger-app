@@ -280,24 +280,6 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
   try {
     console.log('📝 [SERVER] Submit answer:', request)
     
-    // FAIL-SAFE #1: Check for duplicate submission (idempotency)
-    const { data: existingSubmission } = await supabaseAdmin
-      .from('submissions')
-      .select('*')
-      .eq('room_id', request.room_id)
-      .eq('player_id', request.player_id)
-      .eq('question_id', request.question_id)
-      .maybeSingle()
-    
-    if (existingSubmission) {
-      console.log('⚠️ [SERVER] Duplicate submission detected, returning existing:', existingSubmission.id)
-      return { 
-        submission: existingSubmission, 
-        points: existingSubmission.points_awarded,
-        isDuplicate: true 
-      }
-    }
-    
     // Get question to check correct answer
     const { data: question, error: questionError } = await supabaseAdmin
       .from('questions')
@@ -311,29 +293,12 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
       throw new Error('Question not found')
     }
 
-    // Get room settings and game state
+    // Get room settings
     const { data: room } = await supabaseAdmin
       .from('rooms')
-      .select('settings, game_state')
+      .select('settings')
       .eq('id', request.room_id)
       .single()
-    
-    // FAIL-SAFE #2: Validate game hasn't moved to a completely different question
-    // Allow submissions during trivia, trivia_review, and even scavenger (for in-flight requests)
-    // Only reject if we've moved to a different round/question
-    const gameState = room?.game_state as any
-    const currentQuestionId = `${gameState?.current_round}-${gameState?.current_question}`
-    const submittedQuestionRound = question.round_number
-    const submittedQuestionNum = question.question_number
-    const submittedQuestionId = `${submittedQuestionRound}-${submittedQuestionNum}`
-    
-    if (currentQuestionId !== submittedQuestionId) {
-      console.log('⚠️ [SERVER] Submission rejected - game moved to different question:', {
-        submitted: submittedQuestionId,
-        current: currentQuestionId
-      })
-      throw new Error('This question is no longer active')
-    }
 
     const settings = (room?.settings || {}) as GameSettings
     const choices = question.choices as any[]
@@ -342,39 +307,12 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
 
     console.log('📝 [SERVER] Answer check:', { selectedChoice: request.answer_choice_id, isCorrect })
 
-    // FAIL-SAFE #3: Server-side time validation (prevent client clock manipulation)
-    const questionStartTime = new Date(gameState.question_start_time).getTime()
-    const serverTime = Date.now()
-    const actualElapsedTime = serverTime - questionStartTime
-    const timeLimit = (settings.time_per_trivia_question || 30) * 1000
-    
-    // Use the MORE restrictive time (client vs server) to prevent cheating
-    const validatedAnswerTime = Math.max(request.answer_time_ms, actualElapsedTime)
-    
-    // Allow generous 5-second grace period for network latency and auto-advance timing
-    if (actualElapsedTime > timeLimit + 5000) {
-      console.log('⚠️ [SERVER] Answer submitted after time limit:', {
-        actualElapsedTime,
-        timeLimit,
-        gracePeriod: 5000,
-        rejected: true
-      })
-      throw new Error('Answer submitted after time limit expired')
-    }
-    
-    console.log('⏱️ [SERVER] Time validation:', {
-      clientTime: request.answer_time_ms,
-      serverTime: actualElapsedTime,
-      usedTime: validatedAnswerTime,
-      withinTimeLimit: true
-    })
-
-    // Compute points using validated time
+    // Compute points
     const points = computeTriviaPoints(
       isCorrect,
       settings.trivia_base_point || 100,
       settings.time_per_trivia_question || 30,
-      validatedAnswerTime, // Use validated time instead of client-reported time
+      request.answer_time_ms,
       settings.trivia_time_scaling !== false
     )
 
@@ -388,7 +326,7 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
         player_id: request.player_id,
         question_id: request.question_id,
         answer_choice_id: request.answer_choice_id,
-        answer_time_ms: validatedAnswerTime, // Store validated time, not client-reported time
+        answer_time_ms: request.answer_time_ms,
         is_correct: isCorrect,
         points_awarded: points,
       } as any)
