@@ -9,9 +9,6 @@ const nextConfig = {
       bodySizeLimit: '2mb',
     },
   },
-  // Ensure proper routing on Vercel
-  trailingSlash: false,
-  skipTrailingSlashRedirect: true,
 }
 
 module.exports = nextConfig
