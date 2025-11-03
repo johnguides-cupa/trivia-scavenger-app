@@ -9,6 +9,10 @@ const nextConfig = {
       bodySizeLimit: '2mb',
     },
   },
+  // Ensure all routes work properly on Vercel
+  async rewrites() {
+    return []
+  },
 }
 
 module.exports = nextConfig
