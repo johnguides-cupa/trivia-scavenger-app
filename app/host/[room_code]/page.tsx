@@ -23,9 +23,10 @@ export default function HostDashboard() {
   const [showEndGameModal, setShowEndGameModal] = useState(false)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
   const [showContinueScreen, setShowContinueScreen] = useState(false)
+  const [isAdvancing, setIsAdvancing] = useState(false)
   const [loading, setLoading] = useState(true)
   
-  // Ref to prevent duplicate auto-advance calls
+  // Ref to prevent duplicate auto-advance calls (kept for backwards compat)
   const isAdvancingRef = useRef(false)
   // Ref to track last loaded question to prevent duplicate loads
   const lastLoadedQuestionRef = useRef<string>('')
@@ -216,6 +217,7 @@ export default function HostDashboard() {
 
     try {
       isAdvancingRef.current = true
+      setIsAdvancing(true)
       // Don't use setLoading - it causes full screen reload
       
       // Phase transitions: trivia → scavenger → review → next trivia
@@ -336,6 +338,7 @@ export default function HostDashboard() {
       // Reset the advancing flag after a longer delay to prevent auto-advance from triggering too soon
       setTimeout(() => {
         isAdvancingRef.current = false
+        setIsAdvancing(false)
         console.log('🔓 Advancing lock released')
       }, 3000) // 3 seconds to allow question to load and players to see it
     }
@@ -630,9 +633,10 @@ export default function HostDashboard() {
 
                 <button
                   onClick={handleNextPhase}
-                  className="btn-primary w-full"
+                  disabled={isAdvancing}
+                  className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Move to Scavenger Hunt
+                  {isAdvancing ? 'Advancing...' : 'Move to Scavenger Hunt'}
                 </button>
               </div>
             )}
@@ -661,9 +665,10 @@ export default function HostDashboard() {
                 </p>
                 <button
                   onClick={handleNextPhase}
-                  className="btn-primary w-full"
+                  disabled={isAdvancing}
+                  className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Start Review Now
+                  {isAdvancing ? 'Advancing...' : 'Start Review Now'}
                 </button>
               </div>
             )}
@@ -679,9 +684,10 @@ export default function HostDashboard() {
                 <div className="card">
                   <button
                     onClick={handleNextPhase}
-                    className="btn-primary w-full"
+                    disabled={isAdvancing}
+                    className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Next Question
+                    {isAdvancing ? 'Advancing...' : 'Next Question'}
                   </button>
                 </div>
               </div>
@@ -698,9 +704,10 @@ export default function HostDashboard() {
                 <div className="mt-6">
                   <button
                     onClick={handleNextPhase}
-                    className="btn-primary"
+                    disabled={isAdvancing}
+                    className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Start Round {gameState.current_round + 1}
+                    {isAdvancing ? 'Starting...' : `Start Round ${gameState.current_round + 1}`}
                   </button>
                 </div>
               </div>
