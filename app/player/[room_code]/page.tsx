@@ -28,6 +28,7 @@ export default function PlayerRoom() {
   const [submitting, setSubmitting] = useState(false)
   const [showCountdown, setShowCountdown] = useState(false)
   const [countdownValue, setCountdownValue] = useState(3)
+  const [hostConnectionStatus, setHostConnectionStatus] = useState<'connected' | 'slow' | 'disconnected'>('connected')
 
   // Calculate game state variables for hooks (must be before any returns)
   const gameState = room?.game_state as any
@@ -70,7 +71,7 @@ export default function PlayerRoom() {
       playersCount: updatedPlayers.length 
     })
     
-    // Check host presence
+    // Check host presence with 3-tier system
     if (updatedRoom) {
       const gameState = updatedRoom.game_state as any
       const isGameActive = !['lobby', 'finished'].includes(gameState?.status)
@@ -80,13 +81,22 @@ export default function PlayerRoom() {
         const now = Date.now()
         const timeSinceLastPing = now - lastPing
         
-        // If no ping for more than 10 seconds, consider host disconnected
-        if (timeSinceLastPing > 10000) {
+        // 3-tier warning system:
+        // 0-20s: Connected (normal)
+        // 20-40s: Slow (yellow warning)
+        // 40+s: Disconnected (red warning)
+        if (timeSinceLastPing > 40000) {
+          setHostConnectionStatus('disconnected')
           setHostDisconnected(true)
+        } else if (timeSinceLastPing > 20000) {
+          setHostConnectionStatus('slow')
+          setHostDisconnected(false)
         } else {
+          setHostConnectionStatus('connected')
           setHostDisconnected(false)
         }
       } else {
+        setHostConnectionStatus('connected')
         setHostDisconnected(false)
       }
       
@@ -321,7 +331,7 @@ export default function PlayerRoom() {
           setRoom(data.room)
           setPlayers(data.players || [])
           
-          // Check host presence
+          // Check host presence with 3-tier system
           const pollGameState = data.room.game_state as any
           const isGameActive = !['lobby', 'finished'].includes(pollGameState?.status)
           
@@ -330,12 +340,19 @@ export default function PlayerRoom() {
             const now = Date.now()
             const timeSinceLastPing = now - lastPing
             
-            if (timeSinceLastPing > 10000) {
+            // 3-tier warning system
+            if (timeSinceLastPing > 40000) {
+              setHostConnectionStatus('disconnected')
               setHostDisconnected(true)
+            } else if (timeSinceLastPing > 20000) {
+              setHostConnectionStatus('slow')
+              setHostDisconnected(false)
             } else {
+              setHostConnectionStatus('connected')
               setHostDisconnected(false)
             }
           } else if (!isGameActive) {
+            setHostConnectionStatus('connected')
             setHostDisconnected(false)
           }
           
@@ -456,13 +473,24 @@ export default function PlayerRoom() {
           </div>
         </div>
 
+        {/* Connection Status Warning */}
+        {hostConnectionStatus === 'slow' && !showContinueScreen && (
+          <div className="mb-4 p-4 bg-yellow-900/30 border border-yellow-600/50 rounded-lg flex items-center gap-3">
+            <span className="text-2xl animate-pulse">⚠️</span>
+            <div>
+              <p className="text-yellow-300 font-semibold">Host Connection Slow</p>
+              <p className="text-yellow-400/80 text-sm">The host may be experiencing connection issues...</p>
+            </div>
+          </div>
+        )}
+
         {/* Host Disconnected Screen - shows when host exits/refreshes during active game */}
         {hostDisconnected && !showContinueScreen && (
           <div className="card text-center max-w-2xl mx-auto">
             <div className="mb-6">
-              <div className="text-6xl mb-4 animate-pulse">⏸️</div>
-              <h2 className="text-3xl font-bold text-white mb-2">Host Disconnected</h2>
-              <p className="text-gray-400">Waiting for host to return...</p>
+              <div className="text-6xl mb-4 animate-pulse">🔌</div>
+              <h2 className="text-3xl font-bold text-red-400 mb-2">Host Disconnected</h2>
+              <p className="text-gray-400">The host hasn't sent updates for over 40 seconds...</p>
             </div>
 
             <div className="bg-gray-700/50 rounded-lg p-6 mb-6 space-y-3">
@@ -486,9 +514,9 @@ export default function PlayerRoom() {
               </div>
             </div>
 
-            <div className="flex items-center justify-center gap-2 text-orange-400">
+            <div className="flex items-center justify-center gap-2 text-red-400">
               <div className="animate-pulse">⚠️</div>
-              <span className="text-sm font-semibold">Game paused - Host will return shortly</span>
+              <span className="text-sm font-semibold">Host may have closed their browser or lost connection</span>
             </div>
           </div>
         )}

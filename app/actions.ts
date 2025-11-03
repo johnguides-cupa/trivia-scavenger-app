@@ -280,6 +280,24 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
   try {
     console.log('📝 [SERVER] Submit answer:', request)
     
+    // FAIL-SAFE #1: Check for duplicate submission (idempotency)
+    const { data: existingSubmission } = await supabaseAdmin
+      .from('submissions')
+      .select('*')
+      .eq('room_id', request.room_id)
+      .eq('player_id', request.player_id)
+      .eq('question_id', request.question_id)
+      .maybeSingle()
+    
+    if (existingSubmission) {
+      console.log('⚠️ [SERVER] Duplicate submission detected, returning existing:', existingSubmission.id)
+      return { 
+        submission: existingSubmission, 
+        points: existingSubmission.points_awarded,
+        isDuplicate: true 
+      }
+    }
+    
     // Get question to check correct answer
     const { data: question, error: questionError } = await supabaseAdmin
       .from('questions')
@@ -293,12 +311,19 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
       throw new Error('Question not found')
     }
 
-    // Get room settings
+    // Get room settings and game state
     const { data: room } = await supabaseAdmin
       .from('rooms')
-      .select('settings')
+      .select('settings, game_state')
       .eq('id', request.room_id)
       .single()
+    
+    // FAIL-SAFE #2: Validate game is still in trivia phase
+    const gameState = room?.game_state as any
+    if (gameState?.status !== 'trivia') {
+      console.log('⚠️ [SERVER] Submission rejected - game not in trivia phase:', gameState?.status)
+      throw new Error('Answer submission only allowed during trivia phase')
+    }
 
     const settings = (room?.settings || {}) as GameSettings
     const choices = question.choices as any[]
@@ -307,12 +332,36 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
 
     console.log('📝 [SERVER] Answer check:', { selectedChoice: request.answer_choice_id, isCorrect })
 
-    // Compute points
+    // FAIL-SAFE #3: Server-side time validation (prevent client clock manipulation)
+    const questionStartTime = new Date(gameState.question_start_time).getTime()
+    const serverTime = Date.now()
+    const actualElapsedTime = serverTime - questionStartTime
+    const timeLimit = (settings.time_per_trivia_question || 30) * 1000
+    
+    // Use the MORE restrictive time (client vs server) to prevent cheating
+    const validatedAnswerTime = Math.max(request.answer_time_ms, actualElapsedTime)
+    
+    if (actualElapsedTime > timeLimit + 2000) { // 2s grace period for network latency
+      console.log('⚠️ [SERVER] Answer submitted after time limit:', {
+        actualElapsedTime,
+        timeLimit,
+        rejected: true
+      })
+      throw new Error('Answer submitted after time limit expired')
+    }
+    
+    console.log('⏱️ [SERVER] Time validation:', {
+      clientTime: request.answer_time_ms,
+      serverTime: actualElapsedTime,
+      usedTime: validatedAnswerTime
+    })
+
+    // Compute points using validated time
     const points = computeTriviaPoints(
       isCorrect,
       settings.trivia_base_point || 100,
       settings.time_per_trivia_question || 30,
-      request.answer_time_ms,
+      validatedAnswerTime, // Use validated time instead of client-reported time
       settings.trivia_time_scaling !== false
     )
 
@@ -326,7 +375,7 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
         player_id: request.player_id,
         question_id: request.question_id,
         answer_choice_id: request.answer_choice_id,
-        answer_time_ms: request.answer_time_ms,
+        answer_time_ms: validatedAnswerTime, // Store validated time, not client-reported time
         is_correct: isCorrect,
         points_awarded: points,
       } as any)

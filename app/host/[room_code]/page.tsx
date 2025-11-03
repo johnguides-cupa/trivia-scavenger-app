@@ -282,6 +282,18 @@ export default function HostDashboard() {
       setIsAdvancing(true)
       // Don't use setLoading - it causes full screen reload
       
+      // Send immediate host presence ping before phase transition
+      // This prevents players from seeing "disconnected" warnings during transitions
+      try {
+        await fetch('/api/host-presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: room.id }),
+        })
+      } catch (error) {
+        console.error('Failed to send presence ping:', error)
+      }
+      
       // Phase transitions: trivia → trivia_review → scavenger → review → next trivia
       if (gameState.status === 'trivia') {
         // Move to trivia review phase (show correct answer)
