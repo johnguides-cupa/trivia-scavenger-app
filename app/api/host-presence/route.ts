@@ -25,7 +25,8 @@ export async function POST(request: Request) {
       })
       .eq('id', room_id)
 
-    if (error) {
+    // Ignore errors if column doesn't exist yet (graceful degradation)
+    if (error && !error.message?.includes('column') && !error.message?.includes('last_host_ping')) {
       console.error('Error updating host presence:', error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }

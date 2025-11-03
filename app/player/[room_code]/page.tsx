@@ -26,12 +26,15 @@ export default function PlayerRoom() {
   const [questionStartTime, setQuestionStartTime] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [showCountdown, setShowCountdown] = useState(false)
+  const [countdownValue, setCountdownValue] = useState(3)
 
   // Calculate game state variables for hooks (must be before any returns)
   const gameState = room?.game_state as any
   const settings = room?.settings as any
   const isLobby = gameState?.status === 'lobby'
   const isTrivia = gameState?.status === 'trivia'
+  const isTriviaReview = gameState?.status === 'trivia_review'
   const isScavenger = gameState?.status === 'scavenger'
   const isReview = gameState?.status === 'review'
   const isFinished = gameState?.status === 'finished'
@@ -40,7 +43,7 @@ export default function PlayerRoom() {
   const triviaTimer = useGameTimer({
     startTime: gameState?.question_start_time || null,
     duration: settings?.time_per_trivia_question || 30,
-    enabled: isTrivia && !!currentQuestion && !hasAnswered && !!room,
+    enabled: isTrivia && !!currentQuestion && !hasAnswered && !!room && !showCountdown,
     onComplete: () => {
       // Time's up - mark as answered even if they didn't submit
       if (!hasAnswered) {
@@ -86,6 +89,30 @@ export default function PlayerRoom() {
       } else {
         setHostDisconnected(false)
       }
+      
+      // Detect game restart (host clicked "Restart Game")
+      // If we're back in lobby with round 1, clear all answered questions
+      if (gameState?.status === 'lobby' && gameState?.current_round === 1) {
+        const lastKnownRound = localStorage.getItem(`last_round_${updatedRoom.id}`)
+        if (lastKnownRound && parseInt(lastKnownRound) > 1) {
+          console.log('👤 [PLAYER] Game restarted - clearing answered questions')
+          // Clear all answered question keys for this room
+          Object.keys(localStorage).forEach(key => {
+            if (key.startsWith(`answered_${updatedRoom.id}_`)) {
+              localStorage.removeItem(key)
+            }
+          })
+          // Reset local state
+          setHasAnswered(false)
+          setSelectedAnswer(null)
+          setCurrentQuestion(null)
+        }
+      }
+      
+      // Track current round for restart detection
+      if (gameState?.current_round) {
+        localStorage.setItem(`last_round_${updatedRoom.id}`, gameState.current_round.toString())
+      }
     }
     
     // If we receive an update while continue screen is showing, dismiss it
@@ -98,17 +125,21 @@ export default function PlayerRoom() {
     setRoom(updatedRoom)
     setPlayers(updatedPlayers)
     
-    // Update current player info
+    // Update current player info - always sync points from server
     if (typeof window !== 'undefined' && updatedRoom) {
       const playerId = localStorage.getItem(`player_id_${updatedRoom.id}`)
       const player = updatedPlayers.find(p => p.id === playerId)
       if (player) {
         setCurrentPlayer(player)
+        console.log('👤 [PLAYER] Updated player data:', { 
+          id: player.id, 
+          points: player.points 
+        })
       }
 
-      // Load current question if playing trivia
+      // Load current question if playing trivia or reviewing trivia answer
       const gameState = updatedRoom.game_state as any
-      if (gameState?.status === 'trivia') {
+      if (gameState?.status === 'trivia' || gameState?.status === 'trivia_review') {
         console.log('👤 [PLAYER] Loading question:', { 
           roomId: updatedRoom.id, 
           round: gameState.current_round, 
@@ -125,6 +156,12 @@ export default function PlayerRoom() {
           const alreadyAnswered = localStorage.getItem(hasAnsweredKey)
           setHasAnswered(!!alreadyAnswered)
           setSelectedAnswer(null)
+          
+          // Start 3-second countdown for new trivia questions (not for review)
+          if (gameState?.status === 'trivia' && !alreadyAnswered) {
+            setShowCountdown(true)
+            setCountdownValue(3)
+          }
           
           // Set question start time for time-based scoring (only if not already answered)
           if (!alreadyAnswered) {
@@ -237,8 +274,8 @@ export default function PlayerRoom() {
           }
         }
 
-        // If game is already playing trivia, load the current question
-        if (gameState?.status === 'trivia') {
+        // If game is already playing trivia or reviewing answer, load the current question
+        if (gameState?.status === 'trivia' || gameState?.status === 'trivia_review') {
           console.log('👤 [PLAYER] Game already playing, loading question...')
           await loadCurrentQuestion(data.room.id, gameState.current_round, gameState.current_question)
           
@@ -311,9 +348,9 @@ export default function PlayerRoom() {
             }
           }
           
-          // Load question if playing trivia
+          // Load question if playing trivia or reviewing answer
           const pollGameState2 = data.room.game_state as any
-          if (pollGameState2?.status === 'trivia' && !currentQuestion) {
+          if ((pollGameState2?.status === 'trivia' || pollGameState2?.status === 'trivia_review') && !currentQuestion) {
             loadCurrentQuestion(data.room.id, pollGameState2.current_round, pollGameState2.current_question)
           }
         }
@@ -324,6 +361,47 @@ export default function PlayerRoom() {
     
     return () => clearInterval(pollInterval)
   }, [roomCode, room, currentQuestion])
+
+  // Countdown effect - counts down 3...2...1...GO!
+  useEffect(() => {
+    if (!showCountdown) return
+
+    if (countdownValue > 0) {
+      const timer = setTimeout(() => {
+        setCountdownValue(countdownValue - 1)
+      }, 1000)
+      return () => clearTimeout(timer)
+    } else {
+      // Countdown finished - show GO! for 500ms then hide
+      const timer = setTimeout(() => {
+        setShowCountdown(false)
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [showCountdown, countdownValue])
+
+  // Player heartbeat - update last_seen_at every 5 seconds
+  useEffect(() => {
+    if (!currentPlayer || !room) return
+
+    const heartbeatInterval = setInterval(async () => {
+      try {
+        await fetch('/api/player-heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            player_id: currentPlayer.id,
+            room_id: room.id
+          }),
+        })
+      } catch (error) {
+        // Ignore heartbeat errors
+        console.error('Player heartbeat failed:', error)
+      }
+    }, 5000) // Every 5 seconds
+
+    return () => clearInterval(heartbeatInterval)
+  }, [currentPlayer, room])
 
   if (loading) {
     return (
@@ -489,8 +567,8 @@ export default function PlayerRoom() {
         {!showContinueScreen && !hostDisconnected && isTrivia && currentQuestion && (
           <div className="space-y-6">
             <div className="card">
-              {/* Timer */}
-              {!hasAnswered && (
+              {/* Timer - only show when countdown is finished */}
+              {!hasAnswered && !showCountdown && (
                 <div className="mb-6">
                   <Timer 
                     seconds={triviaTimer.secondsLeft}
@@ -505,7 +583,19 @@ export default function PlayerRoom() {
                 <div className="text-sm text-gray-400 mb-2">
                   Round {(room.game_state as any).current_round} • Question {(room.game_state as any).current_question}
                 </div>
-                <h2 className="text-2xl font-bold text-white mb-4">{currentQuestion.stem}</h2>
+                
+                {/* Show "Waiting for question" during countdown, then show actual question */}
+                {showCountdown ? (
+                  <div className="min-h-[100px] flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="animate-pulse text-4xl mb-2">📝</div>
+                      <h2 className="text-xl font-bold text-gray-400">Waiting for question...</h2>
+                      <p className="text-sm text-gray-500 mt-2">Get ready to answer!</p>
+                    </div>
+                  </div>
+                ) : (
+                  <h2 className="text-2xl font-bold text-white mb-4">{currentQuestion.stem}</h2>
+                )}
               </div>
 
               {!hasAnswered ? (
@@ -514,10 +604,12 @@ export default function PlayerRoom() {
                     <button
                       key={choice.id}
                       onClick={() => handleSubmitAnswer(choice.id)}
-                      disabled={submitting}
+                      disabled={submitting || showCountdown}
                       className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
                         selectedAnswer === choice.id
                           ? 'border-purple-500 bg-purple-900/30 text-white'
+                          : showCountdown
+                          ? 'border-gray-700 bg-gray-800 text-gray-500 cursor-not-allowed'
                           : 'border-gray-600 bg-gray-700 hover:border-purple-500/50 hover:bg-gray-600 text-white'
                       } disabled:opacity-50 disabled:cursor-not-allowed`}
                     >
@@ -534,6 +626,58 @@ export default function PlayerRoom() {
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Trivia Review Phase - Show Correct Answer */}
+        {!showContinueScreen && !hostDisconnected && isTriviaReview && currentQuestion && (
+          <div className="space-y-6">
+            <div className="card">
+              <div className="text-center mb-6">
+                <div className="text-sm text-gray-400 mb-2">
+                  Round {(room.game_state as any).current_round} • Question {(room.game_state as any).current_question}
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-4">{currentQuestion.stem}</h2>
+              </div>
+
+              <div className="space-y-3 mb-6">
+                {(currentQuestion.choices as any[])?.map((choice) => {
+                  const isCorrect = choice.is_correct
+                  const wasSelected = selectedAnswer === choice.id
+                  
+                  return (
+                    <div
+                      key={choice.id}
+                      className={`p-4 rounded-lg border-2 ${
+                        isCorrect
+                          ? 'border-green-500 bg-green-900/30'
+                          : wasSelected
+                          ? 'border-red-500 bg-red-900/30'
+                          : 'border-gray-600 bg-gray-800/30'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`font-semibold ${
+                          isCorrect ? 'text-green-300' : wasSelected ? 'text-red-300' : 'text-gray-400'
+                        }`}>
+                          {choice.label}
+                        </span>
+                        {isCorrect && (
+                          <span className="text-green-400 font-bold">✓ Correct</span>
+                        )}
+                        {!isCorrect && wasSelected && (
+                          <span className="text-red-400 font-bold">✗ Your Answer</span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="text-center py-6 bg-gray-700/30 rounded-lg">
+                <p className="text-gray-400">Waiting for host to start scavenger hunt...</p>
+              </div>
             </div>
           </div>
         )}

@@ -612,12 +612,16 @@ export async function startGame(roomCode: string, hostKey: string) {
     console.log('🎮 [SERVER] Found question:', questions?.id)
 
     // Update game state to trivia phase
+    // Add 3 seconds to question_start_time for countdown (3...2...1...GO!)
+    const countdownDelay = 3000 // 3 seconds
+    const questionStartTime = new Date(Date.now() + countdownDelay).toISOString()
+    
     const updatePayload = {
       game_state: {
         status: 'trivia',
         current_round: 1,
         current_question: 1,
-        question_start_time: new Date().toISOString(),
+        question_start_time: questionStartTime,
       },
       last_activity_at: new Date().toISOString(),
     }

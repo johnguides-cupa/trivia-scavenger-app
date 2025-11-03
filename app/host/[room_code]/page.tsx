@@ -25,6 +25,10 @@ export default function HostDashboard() {
   const [showContinueScreen, setShowContinueScreen] = useState(false)
   const [isAdvancing, setIsAdvancing] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [questionLoadTime, setQuestionLoadTime] = useState<number | null>(null)
+  const [currentTime, setCurrentTime] = useState(Date.now()) // For countdown updates
+  const [showCountdown, setShowCountdown] = useState(false)
+  const [countdownValue, setCountdownValue] = useState(3)
   
   // Ref to prevent duplicate auto-advance calls (kept for backwards compat)
   const isAdvancingRef = useRef(false)
@@ -41,6 +45,7 @@ export default function HostDashboard() {
   const settings = room?.settings as any
   const isLobby = gameState?.status === 'lobby'
   const isTrivia = gameState?.status === 'trivia'
+  const isTriviaReview = gameState?.status === 'trivia_review'
   const isScavenger = gameState?.status === 'scavenger'
   const isReview = gameState?.status === 'review'
   const isRoundSummary = gameState?.status === 'round_summary'
@@ -51,7 +56,7 @@ export default function HostDashboard() {
   const triviaTimer = useGameTimer({
     startTime: gameState?.question_start_time || null,
     duration: settings?.time_per_trivia_question || 30,
-    enabled: isTrivia && !!currentQuestion && !!room,
+    enabled: isTrivia && !!currentQuestion && !!room && !showCountdown,
     onComplete: () => {
       // Auto-advance to scavenger phase when trivia timer expires
       if (room && hostKey) {
@@ -83,16 +88,27 @@ export default function HostDashboard() {
     setRoom(updatedRoom)
     setPlayers(updatedPlayers)
     
-    // Load current question if playing trivia
+    // Load current question if playing trivia or reviewing answer
     if (updatedRoom) {
       const gameState = updatedRoom.game_state as any
-      if (gameState?.status === 'trivia') {
+      if (gameState?.status === 'trivia' || gameState?.status === 'trivia_review') {
         console.log('📝 Loading question:', { 
           roomId: updatedRoom.id, 
           round: gameState.current_round, 
           question: gameState.current_question 
         })
+        
+        // Check if this is a new trivia question
+        const questionKey = `${updatedRoom.id}-${gameState.current_round}-${gameState.current_question}`
+        const isNewQuestion = lastLoadedQuestionRef.current !== questionKey
+        
         loadCurrentQuestion(updatedRoom.id, gameState.current_round, gameState.current_question)
+        
+        // Start countdown for new trivia questions
+        if (gameState?.status === 'trivia' && isNewQuestion) {
+          setShowCountdown(true)
+          setCountdownValue(3)
+        }
       }
     }
   })
@@ -121,6 +137,7 @@ export default function HostDashboard() {
         const data = await response.json()
         console.log('✅ Question loaded:', data.question)
         setCurrentQuestion(data.question)
+        setQuestionLoadTime(Date.now()) // Track when question loaded
       } else {
         console.error('❌ Question API error:', response.status, await response.text())
       }
@@ -159,8 +176,8 @@ export default function HostDashboard() {
           console.log('🎮 [HOST] Rejoining mid-game, showing continue screen')
           setShowContinueScreen(true)
           
-          // Load current question if in trivia, scavenger, or review phase
-          if (['trivia', 'scavenger', 'review'].includes(gameState?.status)) {
+          // Load current question if in trivia, trivia_review, scavenger, or review phase
+          if (['trivia', 'trivia_review', 'scavenger', 'review'].includes(gameState?.status)) {
             await loadCurrentQuestion(data.room.id, gameState.current_round, gameState.current_question)
           }
         }
@@ -200,6 +217,39 @@ export default function HostDashboard() {
     return () => clearInterval(interval)
   }, [room])
 
+  // Update current time every 100ms for countdown display
+  useEffect(() => {
+    if (!questionLoadTime) return
+    
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now())
+      // Stop updating after 5 seconds
+      if (Date.now() - questionLoadTime >= 5000) {
+        clearInterval(interval)
+      }
+    }, 100)
+    
+    return () => clearInterval(interval)
+  }, [questionLoadTime])
+
+  // Countdown effect - counts down 3...2...1...GO!
+  useEffect(() => {
+    if (!showCountdown) return
+
+    if (countdownValue > 0) {
+      const timer = setTimeout(() => {
+        setCountdownValue(countdownValue - 1)
+      }, 1000)
+      return () => clearTimeout(timer)
+    } else {
+      // Countdown finished - show GO! for 500ms then hide
+      const timer = setTimeout(() => {
+        setShowCountdown(false)
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [showCountdown, countdownValue])
+
   // Removed fallback polling - relying on realtime subscription only to prevent race conditions
 
   // Define handleNextPhase before auto-advance effect
@@ -215,15 +265,43 @@ export default function HostDashboard() {
     const gameState = room.game_state as any
     const settings = room.settings as any
 
+    // Enforce minimum 5-second wait ONLY during trivia phase
+    // This prevents host from clicking "Show Answer" before players see the question
+    // Does NOT delay question loading - players get question immediately
+    if (gameState?.status === 'trivia' && questionLoadTime) {
+      const elapsedSinceLoad = Date.now() - questionLoadTime
+      if (elapsedSinceLoad < 5000) {
+        const waitTime = ((5000 - elapsedSinceLoad) / 1000).toFixed(1)
+        alert(`Please wait ${waitTime} more seconds to ensure all players have loaded the question.`)
+        return
+      }
+    }
+
     try {
       isAdvancingRef.current = true
       setIsAdvancing(true)
       // Don't use setLoading - it causes full screen reload
       
-      // Phase transitions: trivia → scavenger → review → next trivia
+      // Phase transitions: trivia → trivia_review → scavenger → review → next trivia
       if (gameState.status === 'trivia') {
+        // Move to trivia review phase (show correct answer)
+        console.log('📝 Advancing trivia → trivia_review')
+        const response = await fetch('/api/update-game-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room_code: roomCode,
+            host_key: hostKey,
+            game_state: {
+              ...gameState,
+              status: 'trivia_review',
+            },
+          }),
+        })
+        if (!response.ok) throw new Error('Failed to move to trivia review')
+      } else if (gameState.status === 'trivia_review') {
         // Move to scavenger phase
-        console.log('📝 Advancing trivia → scavenger')
+        console.log('✅ Advancing trivia_review → scavenger')
         const response = await fetch('/api/update-game-state', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -262,6 +340,10 @@ export default function HostDashboard() {
         if (currentQ < settings.questions_per_round) {
           // Next question in same round
           console.log(`➡️ Advancing to question ${currentQ + 1}`)
+          // Add 3 seconds to question_start_time for countdown (3...2...1...GO!)
+          const countdownDelay = 3000
+          const questionStartTime = new Date(Date.now() + countdownDelay).toISOString()
+          
           const response = await fetch('/api/update-game-state', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -272,7 +354,7 @@ export default function HostDashboard() {
                 ...gameState,
                 status: 'trivia',
                 current_question: currentQ + 1,
-                question_start_time: new Date().toISOString(),
+                question_start_time: questionStartTime,
               },
             }),
           })
@@ -314,6 +396,10 @@ export default function HostDashboard() {
         // Continue to next round after showing leaderboard
         const currentRound = gameState.current_round
         console.log(`➡️ Starting round ${currentRound + 1}`)
+        // Add 3 seconds to question_start_time for countdown (3...2...1...GO!)
+        const countdownDelay = 3000
+        const questionStartTime = new Date(Date.now() + countdownDelay).toISOString()
+        
         const response = await fetch('/api/update-game-state', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -325,7 +411,7 @@ export default function HostDashboard() {
               status: 'trivia',
               current_round: currentRound + 1,
               current_question: 1,
-              question_start_time: new Date().toISOString(),
+              question_start_time: questionStartTime,
             },
           }),
         })
@@ -342,7 +428,7 @@ export default function HostDashboard() {
         console.log('🔓 Advancing lock released')
       }, 3000) // 3 seconds to allow question to load and players to see it
     }
-  }, [room, hostKey, roomCode])
+  }, [room, hostKey, roomCode, questionLoadTime])
 
   // Auto-advance when all players have answered (trivia) or submitted (scavenger)
   useEffect(() => {
@@ -365,6 +451,16 @@ export default function HostDashboard() {
         return
       }
 
+      // Enforce minimum time (5 seconds) before auto-advance
+      // This ensures players have time to see the question
+      if (questionLoadTime) {
+        const elapsedSinceLoad = Date.now() - questionLoadTime
+        if (elapsedSinceLoad < 5000) {
+          console.log(`⏸️ Too soon to auto-advance - waiting ${((5000 - elapsedSinceLoad) / 1000).toFixed(1)}s more`)
+          return
+        }
+      }
+
       try {
         if (isTrivia) {
           // Check if all players have answered the current question
@@ -382,7 +478,7 @@ export default function HostDashboard() {
             const data = await response.json()
             console.log(`🔍 Auto-advance check (trivia): ${data.answered_count}/${data.player_count} answered`)
             if (data.all_answered) {
-              console.log('✅ All players answered - auto-advancing to scavenger')
+              console.log('✅ All players answered - auto-advancing to trivia review')
               await handleNextPhase()
             }
           } else {
@@ -421,7 +517,7 @@ export default function HostDashboard() {
     // Check every 2 seconds
     const interval = setInterval(checkAutoAdvance, 2000)
     return () => clearInterval(interval)
-  }, [room, hostKey, currentQuestion, players, isTrivia, isScavenger, handleNextPhase])
+  }, [room, hostKey, currentQuestion, players, isTrivia, isScavenger, handleNextPhase, questionLoadTime])
 
   const handleStartGame = async () => {
     if (!hostKey) return
@@ -606,20 +702,38 @@ export default function HostDashboard() {
             {/* Trivia Phase */}
             {!showContinueScreen && isTrivia && currentQuestion && (
               <div className="card">
-                {/* Timer */}
-                <div className="mb-6">
-                  <Timer 
-                    seconds={triviaTimer.secondsLeft}
-                    totalSeconds={triviaTimer.totalSeconds}
-                    isRunning={triviaTimer.isRunning}
-                    variant="trivia"
-                  />
-                </div>
+                {showCountdown ? (
+                  /* Countdown Screen */
+                  <div className="flex items-center justify-center min-h-[500px]">
+                    <div className="text-center">
+                      <div className="text-9xl font-bold mb-6 animate-pulse">
+                        {countdownValue > 0 ? (
+                          <span className="text-purple-400">{countdownValue}</span>
+                        ) : (
+                          <span className="text-green-400">GO!</span>
+                        )}
+                      </div>
+                      <p className="text-3xl text-gray-400">
+                        {countdownValue > 0 ? 'Get Ready...' : 'Question Starting!'}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Timer */}
+                    <div className="mb-6">
+                      <Timer 
+                        seconds={triviaTimer.secondsLeft}
+                        totalSeconds={triviaTimer.totalSeconds}
+                        isRunning={triviaTimer.isRunning}
+                        variant="trivia"
+                      />
+                    </div>
 
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-bold text-white">
-                    Question {gameState.current_question} / {settings.questions_per_round}
-                  </h2>
+                    <div className="flex justify-between items-center mb-4">
+                      <h2 className="text-xl font-bold text-white">
+                        Question {gameState.current_question} / {settings.questions_per_round}
+                      </h2>
                   <div className="text-2xl font-bold text-pink-400">
                     Round {gameState.current_round} / {settings.number_of_rounds}
                   </div>
@@ -631,12 +745,63 @@ export default function HostDashboard() {
                   </p>
                 </div>
 
+                {questionLoadTime && currentTime - questionLoadTime < 5000 && (
+                  <div className="mb-4 p-3 bg-yellow-900/30 border border-yellow-600/50 rounded-lg">
+                    <p className="text-yellow-300 text-sm text-center">
+                      ⏳ Waiting {Math.ceil((5000 - (currentTime - questionLoadTime)) / 1000)}s for all players to load question...
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleNextPhase}
+                  disabled={isAdvancing || (questionLoadTime ? currentTime - questionLoadTime < 5000 : false)}
+                  className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isAdvancing ? 'Advancing...' : 'Show Answer'}
+                </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Trivia Review Phase - Show Correct Answer */}
+            {!showContinueScreen && isTriviaReview && currentQuestion && (
+              <div className="card">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold text-white">
+                    Question {gameState.current_question} / {settings.questions_per_round}
+                  </h2>
+                  <div className="text-2xl font-bold text-pink-400">
+                    Round {gameState.current_round} / {settings.number_of_rounds}
+                  </div>
+                </div>
+
+                <div className="bg-gray-700/50 rounded-lg p-8 mb-6">
+                  <p className="text-2xl font-bold text-white text-center mb-8">
+                    {currentQuestion.stem}
+                  </p>
+                  
+                  {/* Show only the correct answer */}
+                  {currentQuestion.choices?.find((choice: any) => choice.is_correct) && (
+                    <div className="bg-green-900/40 border-2 border-green-500 rounded-xl p-6 max-w-2xl mx-auto">
+                      <div className="flex items-center justify-center gap-3 mb-3">
+                        <span className="text-3xl">✓</span>
+                        <span className="text-green-400 font-bold text-lg">Correct Answer</span>
+                      </div>
+                      <p className="text-3xl font-bold text-green-100 text-center">
+                        {(currentQuestion.choices?.find((choice: any) => choice.is_correct) as any)?.label}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   onClick={handleNextPhase}
                   disabled={isAdvancing}
                   className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isAdvancing ? 'Advancing...' : 'Move to Scavenger Hunt'}
+                  {isAdvancing ? 'Advancing...' : 'Start Scavenger Hunt'}
                 </button>
               </div>
             )}
