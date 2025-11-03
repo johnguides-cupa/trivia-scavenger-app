@@ -29,6 +29,8 @@ export default function HostDashboard() {
   const [currentTime, setCurrentTime] = useState(Date.now()) // For countdown updates
   const [showCountdown, setShowCountdown] = useState(false)
   const [countdownValue, setCountdownValue] = useState(3)
+  const [waitingForSubmissions, setWaitingForSubmissions] = useState(false)
+
   
   // Ref to prevent duplicate auto-advance calls (kept for backwards compat)
   const isAdvancingRef = useRef(false)
@@ -57,10 +59,45 @@ export default function HostDashboard() {
     startTime: gameState?.question_start_time || null,
     duration: settings?.time_per_trivia_question || 30,
     enabled: isTrivia && !!currentQuestion && !!room && !showCountdown,
-    onComplete: () => {
-      // Auto-advance to scavenger phase when trivia timer expires
-      if (room && hostKey) {
-        handleNextPhase()
+    onComplete: async () => {
+      // Check if at least one player has submitted an answer before auto-advancing
+      if (room && hostKey && currentQuestion) {
+        console.log('⏰ Trivia timer expired - checking for submissions...')
+        
+        try {
+          const response = await fetch('/api/check-submissions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              room_id: room.id,
+              question_id: currentQuestion.id
+            }),
+          })
+          
+          if (response.ok) {
+            const data = await response.json()
+            
+            if (data.hasSubmissions) {
+              console.log('✅ At least one submission found - auto-advancing')
+              setWaitingForSubmissions(false)
+              handleNextPhase()
+            } else {
+              console.log('⚠️ No submissions yet - waiting for players to reconnect...')
+              setWaitingForSubmissions(true)
+              // Don't auto-advance, let host manually advance when ready
+            }
+          } else {
+            // If check fails, default to auto-advancing (don't block the game)
+            console.log('⚠️ Submission check failed - auto-advancing anyway')
+            setWaitingForSubmissions(false)
+            handleNextPhase()
+          }
+        } catch (error) {
+          console.error('Error checking submissions:', error)
+          // If check fails, default to auto-advancing (don't block the game)
+          setWaitingForSubmissions(false)
+          handleNextPhase()
+        }
       }
     },
   })
@@ -280,6 +317,7 @@ export default function HostDashboard() {
     try {
       isAdvancingRef.current = true
       setIsAdvancing(true)
+      setWaitingForSubmissions(false) // Clear warning when manually advancing
       // Don't use setLoading - it causes full screen reload
       
       // Send immediate host presence ping before phase transition
@@ -732,6 +770,19 @@ export default function HostDashboard() {
                   </div>
                 ) : (
                   <>
+                    {/* Warning when waiting for submissions */}
+                    {waitingForSubmissions && (
+                      <div className="mb-4 p-4 bg-yellow-900/30 border border-yellow-600/50 rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl animate-pulse">⚠️</span>
+                          <div>
+                            <p className="text-yellow-300 font-semibold">No submissions yet</p>
+                            <p className="text-yellow-400/80 text-sm">Waiting for at least one player to answer. You can manually advance if needed.</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Timer */}
                     <div className="mb-6">
                       <Timer 
