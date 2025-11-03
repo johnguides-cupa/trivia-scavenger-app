@@ -30,6 +30,9 @@ export default function PlayerRoom() {
   const [countdownValue, setCountdownValue] = useState(3)
   const [hostConnectionStatus, setHostConnectionStatus] = useState<'connected' | 'slow' | 'disconnected'>('connected')
 
+  // Convert questionStartTime (timestamp) to ISO string for the timer hook
+  const questionStartTimeISO = questionStartTime ? new Date(questionStartTime).toISOString() : null
+
   // Calculate game state variables for hooks (must be before any returns)
   const gameState = room?.game_state as any
   const settings = room?.settings as any
@@ -43,7 +46,7 @@ export default function PlayerRoom() {
   // Timer for trivia question - MUST be called unconditionally
   // Uses player's local questionStartTime for fair scoring (each player's timer starts when THEY see the question)
   const triviaTimer = useGameTimer({
-    startTime: questionStartTime ? new Date(questionStartTime).toISOString() : null,
+    startTime: questionStartTimeISO,
     duration: settings?.time_per_trivia_question || 30,
     enabled: isTrivia && !!currentQuestion && !hasAnswered && !!room && !showCountdown && !!questionStartTime,
     onComplete: () => {
@@ -185,7 +188,15 @@ export default function PlayerRoom() {
 
   // Load current question
   const loadCurrentQuestion = async (roomId: string, round: number, questionNum: number) => {
+    // Prevent loading the same question multiple times
+    const questionKey = `${round}-${questionNum}`
+    if (currentQuestion && (currentQuestion as any).round_number === round && (currentQuestion as any).question_number === questionNum) {
+      console.log('⏸️ [PLAYER] Question already loaded, skipping:', questionKey)
+      return
+    }
+    
     try {
+      console.log('🔍 [PLAYER] Fetching question from API:', questionKey)
       const response = await fetch('/api/question', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -195,16 +206,21 @@ export default function PlayerRoom() {
       if (response.ok) {
         const data = await response.json()
         setCurrentQuestion(data.question)
+        console.log('✅ [PLAYER] Question loaded')
         
         // Start timer NOW when question actually loads on this player's device
         // This ensures fair scoring regardless of connection speed
-        const questionKey = `${round}-${questionNum}`
         const hasAnsweredKey = `answered_${roomId}_${questionKey}`
         const alreadyAnswered = localStorage.getItem(hasAnsweredKey)
         
         if (!alreadyAnswered) {
-          setQuestionStartTime(Date.now())
-          console.log('⏱️ [PLAYER] Timer started - question loaded on device')
+          const startTime = Date.now()
+          setQuestionStartTime(startTime)
+          console.log('⏱️ [PLAYER] Timer started:', {
+            timestamp: startTime,
+            iso: new Date(startTime).toISOString(),
+            question: questionKey
+          })
         }
       }
     } catch (error) {
