@@ -21,6 +21,8 @@ export default function PlayerRoom() {
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null)
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null)
   const [hasAnswered, setHasAnswered] = useState(false)
+  const [showContinueScreen, setShowContinueScreen] = useState(false)
+  const [hostDisconnected, setHostDisconnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
@@ -63,6 +65,35 @@ export default function PlayerRoom() {
       gameState: updatedRoom?.game_state,
       playersCount: updatedPlayers.length 
     })
+    
+    // Check host presence
+    if (updatedRoom) {
+      const gameState = updatedRoom.game_state as any
+      const isGameActive = !['lobby', 'finished'].includes(gameState?.status)
+      
+      if (isGameActive && updatedRoom.last_host_ping) {
+        const lastPing = new Date(updatedRoom.last_host_ping).getTime()
+        const now = Date.now()
+        const timeSinceLastPing = now - lastPing
+        
+        // If no ping for more than 10 seconds, consider host disconnected
+        if (timeSinceLastPing > 10000) {
+          setHostDisconnected(true)
+        } else {
+          setHostDisconnected(false)
+        }
+      } else {
+        setHostDisconnected(false)
+      }
+    }
+    
+    // If we receive an update while continue screen is showing, dismiss it
+    // This happens when host continues or game progresses
+    if (showContinueScreen && updatedRoom) {
+      console.log('👤 [PLAYER] Dismissing continue screen due to game update')
+      setShowContinueScreen(false)
+    }
+    
     setRoom(updatedRoom)
     setPlayers(updatedPlayers)
     
@@ -82,20 +113,6 @@ export default function PlayerRoom() {
           round: gameState.current_round, 
           question: gameState.current_question 
         })
-        
-        // If game restarted (round 1, question 1), clear all localStorage answer data
-        if (gameState.current_round === 1 && gameState.current_question === 1) {
-          console.log('🔄 [PLAYER] Game restarted - clearing answer history')
-          // Clear all answer keys for this room
-          Object.keys(localStorage).forEach(key => {
-            if (key.startsWith(`answered_${updatedRoom.id}_`) || 
-                key.startsWith(`last_question_${updatedRoom.id}`)) {
-              localStorage.removeItem(key)
-            }
-          })
-          setHasAnswered(false)
-          setSelectedAnswer(null)
-        }
         
         loadCurrentQuestion(updatedRoom.id, gameState.current_round, gameState.current_question)
         // Reset answer state for new question
@@ -187,6 +204,14 @@ export default function PlayerRoom() {
         setRoom(data.room)
         setPlayers(data.players || [])
 
+        // Check if rejoining mid-game (not lobby or finished)
+        const gameState = data.room.game_state as any
+        const isInProgress = !['lobby', 'finished'].includes(gameState?.status)
+        if (isInProgress) {
+          console.log('👤 [PLAYER] Rejoining mid-game, showing continue screen')
+          setShowContinueScreen(true)
+        }
+
         // Find current player
         if (typeof window !== 'undefined') {
           const playerId = localStorage.getItem(`player_id_${data.room.id}`)
@@ -197,7 +222,6 @@ export default function PlayerRoom() {
         }
 
         // If game is already playing trivia, load the current question
-        const gameState = data.room.game_state as any
         if (gameState?.status === 'trivia') {
           console.log('👤 [PLAYER] Game already playing, loading question...')
           await loadCurrentQuestion(data.room.id, gameState.current_round, gameState.current_question)
@@ -244,6 +268,24 @@ export default function PlayerRoom() {
           setRoom(data.room)
           setPlayers(data.players || [])
           
+          // Check host presence
+          const pollGameState = data.room.game_state as any
+          const isGameActive = !['lobby', 'finished'].includes(pollGameState?.status)
+          
+          if (isGameActive && data.room.last_host_ping) {
+            const lastPing = new Date(data.room.last_host_ping).getTime()
+            const now = Date.now()
+            const timeSinceLastPing = now - lastPing
+            
+            if (timeSinceLastPing > 10000) {
+              setHostDisconnected(true)
+            } else {
+              setHostDisconnected(false)
+            }
+          } else if (!isGameActive) {
+            setHostDisconnected(false)
+          }
+          
           // Update current player
           if (typeof window !== 'undefined') {
             const playerId = localStorage.getItem(`player_id_${data.room.id}`)
@@ -254,9 +296,9 @@ export default function PlayerRoom() {
           }
           
           // Load question if playing trivia
-          const gameState = data.room.game_state as any
-          if (gameState?.status === 'trivia' && !currentQuestion) {
-            loadCurrentQuestion(data.room.id, gameState.current_round, gameState.current_question)
+          const pollGameState2 = data.room.game_state as any
+          if (pollGameState2?.status === 'trivia' && !currentQuestion) {
+            loadCurrentQuestion(data.room.id, pollGameState2.current_round, pollGameState2.current_question)
           }
         }
       } catch (error) {
@@ -320,8 +362,84 @@ export default function PlayerRoom() {
           </div>
         </div>
 
+        {/* Host Disconnected Screen - shows when host exits/refreshes during active game */}
+        {hostDisconnected && !showContinueScreen && (
+          <div className="card text-center max-w-2xl mx-auto">
+            <div className="mb-6">
+              <div className="text-6xl mb-4 animate-pulse">⏸️</div>
+              <h2 className="text-3xl font-bold text-white mb-2">Host Disconnected</h2>
+              <p className="text-gray-400">Waiting for host to return...</p>
+            </div>
+
+            <div className="bg-gray-700/50 rounded-lg p-6 mb-6 space-y-3">
+              <div className="text-gray-300">
+                <span className="text-gray-500">Round:</span>{' '}
+                <span className="text-white font-semibold">
+                  {gameState?.current_round} of {settings?.number_of_rounds}
+                </span>
+              </div>
+              <div className="text-gray-300">
+                <span className="text-gray-500">Question:</span>{' '}
+                <span className="text-white font-semibold">
+                  {gameState?.current_question} of {settings?.questions_per_round}
+                </span>
+              </div>
+              <div className="text-gray-300">
+                <span className="text-gray-500">Phase:</span>{' '}
+                <span className="text-orange-400 font-semibold capitalize">
+                  {gameState?.status}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 text-orange-400">
+              <div className="animate-pulse">⚠️</div>
+              <span className="text-sm font-semibold">Game paused - Host will return shortly</span>
+            </div>
+          </div>
+        )}
+
+        {/* Continue Screen - shows when rejoining mid-game */}
+        {showContinueScreen && (
+          <div className="card text-center max-w-2xl mx-auto">
+            <div className="mb-6">
+              <div className="inline-block bg-purple-900/50 border border-purple-700 rounded-full px-6 py-2 mb-4">
+                <span className="text-purple-300 font-semibold">Game in Progress</span>
+              </div>
+              <h2 className="text-3xl font-bold text-white mb-2">Waiting to Resume...</h2>
+              <p className="text-gray-400">The host will continue the game shortly</p>
+            </div>
+
+            <div className="bg-gray-700/50 rounded-lg p-6 mb-6 space-y-3">
+              <div className="text-gray-300">
+                <span className="text-gray-500">Round:</span>{' '}
+                <span className="text-white font-semibold">
+                  {gameState?.current_round} of {settings?.number_of_rounds}
+                </span>
+              </div>
+              <div className="text-gray-300">
+                <span className="text-gray-500">Question:</span>{' '}
+                <span className="text-white font-semibold">
+                  {gameState?.current_question} of {settings?.questions_per_round}
+                </span>
+              </div>
+              <div className="text-gray-300">
+                <span className="text-gray-500">Phase:</span>{' '}
+                <span className="text-purple-400 font-semibold capitalize">
+                  {gameState?.status}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 text-gray-400">
+              <div className="animate-pulse">●</div>
+              <span className="text-sm">Waiting for host...</span>
+            </div>
+          </div>
+        )}
+
         {/* Lobby State */}
-        {isLobby && (
+        {!showContinueScreen && !hostDisconnected && isLobby && (
           <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-xl p-8 text-center">
             <div className="mb-8">
               <div className="animate-pulse text-6xl mb-4">⏳</div>
@@ -352,7 +470,7 @@ export default function PlayerRoom() {
         )}
 
         {/* Trivia Phase */}
-        {isTrivia && currentQuestion && (
+        {!showContinueScreen && !hostDisconnected && isTrivia && currentQuestion && (
           <div className="space-y-6">
             <div className="card">
               {/* Timer */}
@@ -405,7 +523,7 @@ export default function PlayerRoom() {
         )}
 
         {/* Scavenger Phase */}
-        {isScavenger && currentQuestion && currentPlayer && (
+        {!showContinueScreen && !hostDisconnected && isScavenger && currentQuestion && currentPlayer && (
           <div className="space-y-6">
             {/* Scavenger Timer */}
             <div className="card">
@@ -429,7 +547,7 @@ export default function PlayerRoom() {
         )}
 
         {/* Review Phase (Host is reviewing submissions) */}
-        {isReview && (
+        {!showContinueScreen && !hostDisconnected && isReview && (
           <div className="card text-center">
             <div className="mb-8">
               <div className="animate-pulse text-6xl mb-4">👀</div>
@@ -442,7 +560,7 @@ export default function PlayerRoom() {
         )}
 
         {/* Finished State */}
-        {isFinished && (
+        {!showContinueScreen && !hostDisconnected && isFinished && (
           <div className="card text-center">
             <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-red-400 bg-clip-text text-transparent mb-6">Game Over!</h2>
             

@@ -10,7 +10,7 @@ import { Timer } from '@/components/Timer'
 import { Leaderboard } from '@/components/Leaderboard'
 import { ConfirmModal } from '@/components/ConfirmModal'
 import ScavengerReview from '@/components/ScavengerReview'
-import { startGame } from '@/app/actions'
+import { startGame, restartGame } from '@/app/actions'
 
 export default function HostDashboard() {
   const params = useParams()
@@ -22,6 +22,7 @@ export default function HostDashboard() {
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null)
   const [showEndGameModal, setShowEndGameModal] = useState(false)
   const [showLeaderboard, setShowLeaderboard] = useState(false)
+  const [showContinueScreen, setShowContinueScreen] = useState(false)
   const [loading, setLoading] = useState(true)
   
   // Ref to prevent duplicate auto-advance calls
@@ -40,6 +41,7 @@ export default function HostDashboard() {
   const isScavenger = gameState?.status === 'scavenger'
   const isReview = gameState?.status === 'review'
   const isRoundSummary = gameState?.status === 'round_summary'
+  const isPaused = gameState?.status === 'paused'
   const isFinished = gameState?.status === 'finished'
 
   // Timer for trivia question - MUST be called unconditionally (hooks rule)
@@ -136,6 +138,19 @@ export default function HostDashboard() {
         const data = await response.json()
         setRoom(data.room)
         setPlayers(data.players || [])
+        
+        // Check if rejoining mid-game (not lobby or finished)
+        const gameState = data.room.game_state as any
+        const isInProgress = !['lobby', 'finished'].includes(gameState?.status)
+        if (isInProgress) {
+          console.log('🎮 [HOST] Rejoining mid-game, showing continue screen')
+          setShowContinueScreen(true)
+          
+          // Load current question if in trivia, scavenger, or review phase
+          if (['trivia', 'scavenger', 'review'].includes(gameState?.status)) {
+            await loadCurrentQuestion(data.room.id, gameState.current_round, gameState.current_question)
+          }
+        }
       } catch (error) {
         console.error('Failed to load room:', error)
         router.push('/')
@@ -146,6 +161,31 @@ export default function HostDashboard() {
 
     loadRoom()
   }, [roomCode, router])
+
+  // Host presence heartbeat - updates last_host_ping timestamp
+  useEffect(() => {
+    if (!room) return
+
+    const updatePresence = async () => {
+      try {
+        await fetch('/api/host-presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: room.id }),
+        })
+      } catch (error) {
+        console.error('Failed to update host presence:', error)
+      }
+    }
+
+    // Update immediately
+    updatePresence()
+
+    // Update every 3 seconds
+    const interval = setInterval(updatePresence, 3000)
+
+    return () => clearInterval(interval)
+  }, [room])
 
   // Fallback polling if realtime doesn't work
   useEffect(() => {
@@ -194,7 +234,7 @@ export default function HostDashboard() {
 
     try {
       isAdvancingRef.current = true
-      setLoading(true)
+      // Don't use setLoading - it causes full screen reload
       
       // Phase transitions: trivia → scavenger → review → next trivia
       if (gameState.status === 'trivia') {
@@ -311,7 +351,6 @@ export default function HostDashboard() {
       console.error('Failed to advance phase:', error)
       alert('Failed to advance. Please try again.')
     } finally {
-      setLoading(false)
       // Reset the advancing flag after a delay to allow state to update
       setTimeout(() => {
         isAdvancingRef.current = false
@@ -321,9 +360,25 @@ export default function HostDashboard() {
 
   // Auto-advance when all players have answered (trivia) or submitted (scavenger)
   useEffect(() => {
-    if (!room || !hostKey || !currentQuestion || players.length === 0) return
+    if (!room || !hostKey || !currentQuestion || players.length === 0) {
+      console.log('⏸️ Auto-advance disabled:', { 
+        hasRoom: !!room, 
+        hasHostKey: !!hostKey, 
+        hasQuestion: !!currentQuestion, 
+        playerCount: players.length 
+      })
+      return
+    }
+
+    console.log('✅ Auto-advance enabled - checking every 2 seconds')
 
     const checkAutoAdvance = async () => {
+      // Skip if already advancing
+      if (isAdvancingRef.current) {
+        console.log('⏸️ Skipping auto-advance check - already advancing')
+        return
+      }
+
       try {
         if (isTrivia) {
           // Check if all players have answered the current question
@@ -344,6 +399,8 @@ export default function HostDashboard() {
               console.log('✅ All players answered - auto-advancing to scavenger')
               await handleNextPhase()
             }
+          } else {
+            console.error('❌ Failed to check all answered:', response.status)
           }
         } else if (isScavenger) {
           // Check if all players have submitted scavenger
@@ -363,12 +420,17 @@ export default function HostDashboard() {
               console.log('✅ All players submitted scavenger - auto-advancing to review')
               await handleNextPhase()
             }
+          } else {
+            console.error('❌ Failed to check all submitted:', response.status)
           }
         }
       } catch (error) {
         console.error('Error checking auto-advance:', error)
       }
     }
+
+    // Run immediately on mount
+    checkAutoAdvance()
 
     // Check every 2 seconds
     const interval = setInterval(checkAutoAdvance, 2000)
@@ -380,13 +442,30 @@ export default function HostDashboard() {
     
     try {
       setLoading(true)
-      console.log('🎮 Starting game...', { roomCode, hostKey })
+      console.log('🎮 Starting game from lobby...', { roomCode, hostKey })
       const result = await startGame(roomCode, hostKey)
       console.log('✅ Game started:', result)
       // The realtime subscription will update the UI automatically
     } catch (error) {
       console.error('❌ Failed to start game:', error)
       alert('Failed to start game. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleRestartGame = async () => {
+    if (!hostKey) return
+    
+    try {
+      setLoading(true)
+      console.log('🔄 Restarting game (resetting all scores)...', { roomCode, hostKey })
+      const result = await restartGame(roomCode, hostKey)
+      console.log('✅ Game restarted - returned to lobby with scores reset')
+      // The realtime subscription will update the UI automatically
+    } catch (error) {
+      console.error('❌ Failed to restart game:', error)
+      alert('Failed to restart game. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -467,8 +546,38 @@ export default function HostDashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Content */}
           <div className="lg:col-span-2 space-y-6">
+            {/* Continue Screen (when rejoining mid-game) */}
+            {showContinueScreen && (
+              <div className="card text-center">
+                <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent mb-4">
+                  Game in Progress
+                </h2>
+                <div className="bg-gray-700/50 rounded-lg p-6 mb-6">
+                  <div className="text-gray-300 mb-2">Current Status</div>
+                  <div className="text-2xl font-bold text-white mb-1">
+                    Round {gameState.current_round} of {settings.number_of_rounds}
+                  </div>
+                  <div className="text-lg text-gray-400">
+                    Question {gameState.current_question} of {settings.questions_per_round}
+                  </div>
+                  <div className="mt-4 text-sm text-gray-400">
+                    Phase: <span className="text-pink-400 capitalize">{gameState.status}</span>
+                  </div>
+                </div>
+                <p className="text-gray-300 mb-6">
+                  Click continue to resume the game
+                </p>
+                <button
+                  onClick={() => setShowContinueScreen(false)}
+                  className="btn-primary"
+                >
+                  Continue Game
+                </button>
+              </div>
+            )}
+
             {/* Lobby State */}
-            {isLobby && (
+            {!showContinueScreen && isLobby && (
               <div className="card">
                 <h2 className="text-2xl font-bold text-white mb-4">Waiting for Players</h2>
                 <p className="text-gray-300 mb-6">
@@ -509,7 +618,7 @@ export default function HostDashboard() {
             )}
 
             {/* Trivia Phase */}
-            {isTrivia && currentQuestion && (
+            {!showContinueScreen && isTrivia && currentQuestion && (
               <div className="card">
                 {/* Timer */}
                 <div className="mb-6">
@@ -546,7 +655,7 @@ export default function HostDashboard() {
             )}
 
             {/* Scavenger Phase */}
-            {isScavenger && currentQuestion && (
+            {!showContinueScreen && isScavenger && currentQuestion && (
               <div className="card">
                 {/* Timer */}
                 <div className="mb-6">
@@ -577,7 +686,7 @@ export default function HostDashboard() {
             )}
 
             {/* Review Phase */}
-            {isReview && currentQuestion && (
+            {!showContinueScreen && isReview && currentQuestion && (
               <div className="space-y-6">
                 <ScavengerReview
                   roomCode={roomCode}
@@ -596,7 +705,7 @@ export default function HostDashboard() {
             )}
 
             {/* Round Summary */}
-            {isRoundSummary && (
+            {!showContinueScreen && isRoundSummary && (
               <div className="card text-center">
                 <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent mb-2">
                   Round {gameState.current_round} Complete!
@@ -627,7 +736,7 @@ export default function HostDashboard() {
                     Exit Room
                   </button>
                   <button
-                    onClick={handleStartGame}
+                    onClick={handleRestartGame}
                     className="btn-primary"
                   >
                     Play Again
@@ -653,6 +762,12 @@ export default function HostDashboard() {
               <div className="card">
                 <h3 className="text-xl font-bold text-white mb-4">Actions</h3>
                 <div className="space-y-2">
+                  <button
+                    onClick={handleRestartGame}
+                    className="btn-secondary w-full text-sm"
+                  >
+                    Restart Game
+                  </button>
                   <button
                     onClick={() => setShowEndGameModal(true)}
                     className="btn-error w-full text-sm"

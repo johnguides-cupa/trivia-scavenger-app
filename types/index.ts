@@ -34,6 +34,7 @@ export interface Room {
   preset_expires_at: string | null
   created_at: string
   last_activity_at: string
+  last_host_ping?: string
   expires_at: string
   settings: GameSettings
   game_state: GameState

@@ -643,6 +643,73 @@ export async function startGame(roomCode: string, hostKey: string) {
 }
 
 /**
+ * Restart game - reset scores and return to lobby
+ */
+export async function restartGame(roomCode: string, hostKey: string) {
+  try {
+    console.log('🔄 [SERVER] Restarting game...', { roomCode })
+    
+    // Find room and verify host
+    const { data: room, error: roomError } = await supabaseAdmin
+      .from('rooms')
+      .select('*')
+      .eq('room_code', roomCode)
+      .single()
+
+    if (roomError || !room || room.host_key !== hostKey) {
+      throw new Error('Unauthorized or room not found')
+    }
+
+    // Reset all player points to 0
+    console.log('🔄 [SERVER] Resetting player points...')
+    await supabaseAdmin
+      .from('players')
+      .update({ points: 0 } as any)
+      .eq('room_id', room.id)
+
+    // Delete all previous submissions (trivia answers)
+    console.log('🔄 [SERVER] Clearing trivia submissions...')
+    await supabaseAdmin
+      .from('submissions')
+      .delete()
+      .eq('room_id', room.id)
+
+    // Delete all previous scavenger submissions
+    console.log('🔄 [SERVER] Clearing scavenger submissions...')
+    await supabaseAdmin
+      .from('scavenger_submissions')
+      .delete()
+      .eq('room_id', room.id)
+
+    // Update game state to lobby
+    const updatePayload = {
+      game_state: {
+        status: 'lobby',
+        current_round: 1,
+        current_question: 1,
+      },
+      last_activity_at: new Date().toISOString(),
+    }
+    
+    const { error: updateError } = await supabaseAdmin
+      .from('rooms')
+      .update(updatePayload as any)
+      .eq('id', room.id)
+
+    if (updateError) {
+      throw new Error('Failed to restart game')
+    }
+
+    console.log('🔄 [SERVER] Game restarted - returned to lobby with all data cleared')
+
+    return { success: true }
+  } catch (error) {
+    console.error('Error in restartGame:', error)
+    throw error
+  }
+}
+
+/**
  * Get leaderboard for a room
  */
 export async function getLeaderboard(roomId: string) {
