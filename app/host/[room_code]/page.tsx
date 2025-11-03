@@ -27,6 +27,8 @@ export default function HostDashboard() {
   
   // Ref to prevent duplicate auto-advance calls
   const isAdvancingRef = useRef(false)
+  // Ref to track last loaded question to prevent duplicate loads
+  const lastLoadedQuestionRef = useRef<string>('')
 
   // Get host key from localStorage
   const hostKey = typeof window !== 'undefined' 
@@ -96,8 +98,18 @@ export default function HostDashboard() {
 
   // Load current question
   const loadCurrentQuestion = async (roomId: string, round: number, questionNum: number) => {
+    const questionKey = `${roomId}-${round}-${questionNum}`
+    
+    // Prevent loading the same question multiple times
+    if (lastLoadedQuestionRef.current === questionKey) {
+      console.log('⏸️ Question already loaded, skipping:', questionKey)
+      return
+    }
+    
     try {
       console.log('🔍 Fetching question from API...', { roomId, round, questionNum })
+      lastLoadedQuestionRef.current = questionKey
+      
       const response = await fetch('/api/question', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -187,37 +199,7 @@ export default function HostDashboard() {
     return () => clearInterval(interval)
   }, [room])
 
-  // Fallback polling if realtime doesn't work
-  useEffect(() => {
-    if (!roomCode) return
-    
-    const pollInterval = setInterval(async () => {
-      try {
-        const response = await fetch('/api/room', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room_code: roomCode }),
-        })
-        
-        if (response.ok) {
-          const data = await response.json()
-          console.log('🔄 [POLL] Room update:', data.room.game_state)
-          setRoom(data.room)
-          setPlayers(data.players || [])
-          
-          // Load question if playing
-          const gameState = data.room.game_state as any
-          if (gameState?.status === 'playing') {
-            loadCurrentQuestion(data.room.id, gameState.current_round, gameState.current_question)
-          }
-        }
-      } catch (error) {
-        console.error('[POLL] Failed:', error)
-      }
-    }, 2000) // Poll every 2 seconds
-    
-    return () => clearInterval(pollInterval)
-  }, [roomCode])
+  // Removed fallback polling - relying on realtime subscription only to prevent race conditions
 
   // Define handleNextPhase before auto-advance effect
   const handleNextPhase = useCallback(async () => {
@@ -351,10 +333,11 @@ export default function HostDashboard() {
       console.error('Failed to advance phase:', error)
       alert('Failed to advance. Please try again.')
     } finally {
-      // Reset the advancing flag after a delay to allow state to update
+      // Reset the advancing flag after a longer delay to prevent auto-advance from triggering too soon
       setTimeout(() => {
         isAdvancingRef.current = false
-      }, 1000)
+        console.log('🔓 Advancing lock released')
+      }, 3000) // 3 seconds to allow question to load and players to see it
     }
   }, [room, hostKey, roomCode])
 

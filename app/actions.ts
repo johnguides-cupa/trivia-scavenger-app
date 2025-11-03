@@ -340,26 +340,35 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
       throw new Error('Failed to submit answer')
     }
 
-    // Update player points using the increment function
+    // Update player points using atomic RPC function
     console.log('📝 [SERVER] Adding points:', {
       playerId: request.player_id,
       pointsToAdd: points
     })
 
-    try {
-      await supabaseAdmin.rpc('increment_player_points', {
+    // Use RPC function for atomic increment (prevents race conditions and caching issues)
+    const { data: updatedPlayer, error: rpcError } = await supabaseAdmin
+      .rpc('increment_player_points', {
         player_uuid: request.player_id,
         points_to_add: points
-      } as any)
-      console.log('✅ [SERVER] Points updated via increment_player_points')
-    } catch (rpcError) {
-      console.error('❌ RPC failed, using direct update:', rpcError)
-      // Direct update as absolute fallback
-      await supabaseAdmin
-        .from('players')
-        .update({ points: points } as any) // This will at least set SOMETHING
-        .eq('id', request.player_id)
+      })
+      .single()
+    
+    if (rpcError) {
+      console.error('❌ RPC error:', rpcError)
+      throw new Error(`Failed to update points: ${rpcError.message}`)
     }
+    
+    if (!updatedPlayer) {
+      console.error('❌ No data returned from RPC')
+      throw new Error('Failed to update points - no data returned')
+    }
+    
+    console.log('✅ [SERVER] Points updated successfully:', {
+      playerName: updatedPlayer.display_name,
+      newTotal: updatedPlayer.points,
+      pointsAdded: points
+    })
 
     return { submission, points }
   } catch (error) {
@@ -470,22 +479,26 @@ export async function approveScavenger(request: ApproveScavengerRequest) {
       throw new Error('Failed to update submission')
     }
 
-    // Update player points - simple add
-    const { data: currentPlayer } = await supabaseAdmin
-      .from('players')
-      .select('points')
-      .eq('id', (submission as any).player_id)
+    // Update player points using atomic RPC function
+    const { data: updatedPlayer, error: rpcError } = await supabaseAdmin
+      .rpc('increment_player_points', {
+        player_uuid: (submission as any).player_id,
+        points_to_add: points
+      })
       .single()
 
-    const currentPoints = (currentPlayer as any)?.points || 0
-    const newPoints = currentPoints + points
+    if (rpcError) {
+      console.error('❌ Scavenger RPC error:', rpcError)
+      throw new Error(`Failed to update scavenger points: ${rpcError.message}`)
+    }
 
-    await supabaseAdmin
-      .from('players')
-      .update({ points: newPoints } as any)
-      .eq('id', (submission as any).player_id)
-
-    console.log('✅ Scavenger points updated:', { was: currentPoints, added: points, now: newPoints })
+    console.log('✅ [SERVER] Scavenger reviewed:', {
+      submission_id: request.submission_id,
+      player_id: (submission as any).player_id,
+      approved: request.approved,
+      points_awarded: points,
+      new_total: updatedPlayer?.points
+    })
 
     return { points }
   } catch (error) {
