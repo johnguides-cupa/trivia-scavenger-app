@@ -318,11 +318,21 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
       .eq('id', request.room_id)
       .single()
     
-    // FAIL-SAFE #2: Validate game is still in trivia phase
+    // FAIL-SAFE #2: Validate game hasn't moved to a completely different question
+    // Allow submissions during trivia, trivia_review, and even scavenger (for in-flight requests)
+    // Only reject if we've moved to a different round/question
     const gameState = room?.game_state as any
-    if (gameState?.status !== 'trivia') {
-      console.log('⚠️ [SERVER] Submission rejected - game not in trivia phase:', gameState?.status)
-      throw new Error('Answer submission only allowed during trivia phase')
+    const currentQuestionId = `${gameState?.current_round}-${gameState?.current_question}`
+    const submittedQuestionRound = question.round_number
+    const submittedQuestionNum = question.question_number
+    const submittedQuestionId = `${submittedQuestionRound}-${submittedQuestionNum}`
+    
+    if (currentQuestionId !== submittedQuestionId) {
+      console.log('⚠️ [SERVER] Submission rejected - game moved to different question:', {
+        submitted: submittedQuestionId,
+        current: currentQuestionId
+      })
+      throw new Error('This question is no longer active')
     }
 
     const settings = (room?.settings || {}) as GameSettings
@@ -341,10 +351,12 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
     // Use the MORE restrictive time (client vs server) to prevent cheating
     const validatedAnswerTime = Math.max(request.answer_time_ms, actualElapsedTime)
     
-    if (actualElapsedTime > timeLimit + 2000) { // 2s grace period for network latency
+    // Allow generous 5-second grace period for network latency and auto-advance timing
+    if (actualElapsedTime > timeLimit + 5000) {
       console.log('⚠️ [SERVER] Answer submitted after time limit:', {
         actualElapsedTime,
         timeLimit,
+        gracePeriod: 5000,
         rejected: true
       })
       throw new Error('Answer submitted after time limit expired')
@@ -353,7 +365,8 @@ export async function submitAnswer(request: SubmitAnswerRequest) {
     console.log('⏱️ [SERVER] Time validation:', {
       clientTime: request.answer_time_ms,
       serverTime: actualElapsedTime,
-      usedTime: validatedAnswerTime
+      usedTime: validatedAnswerTime,
+      withinTimeLimit: true
     })
 
     // Compute points using validated time
