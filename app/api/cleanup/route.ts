@@ -2,6 +2,8 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
+export const dynamic = 'force-dynamic'
+
 /**
  * API route for cleanup of expired rooms and presets
  * Can be called manually or scheduled via cron (Vercel Cron, external service, etc.)
