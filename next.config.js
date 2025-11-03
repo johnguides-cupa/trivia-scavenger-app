@@ -9,10 +9,9 @@ const nextConfig = {
       bodySizeLimit: '2mb',
     },
   },
-  // Ensure all routes work properly on Vercel
-  async rewrites() {
-    return []
-  },
+  // Ensure proper routing on Vercel
+  trailingSlash: false,
+  skipTrailingSlashRedirect: true,
 }
 
 module.exports = nextConfig
