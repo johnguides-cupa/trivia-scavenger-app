@@ -23,6 +23,7 @@ export default function PlayerRoom() {
   const [hasAnswered, setHasAnswered] = useState(false)
   const [showContinueScreen, setShowContinueScreen] = useState(false)
   const [hostDisconnected, setHostDisconnected] = useState(false)
+  const [questionStartTime, setQuestionStartTime] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
@@ -124,6 +125,12 @@ export default function PlayerRoom() {
           const alreadyAnswered = localStorage.getItem(hasAnsweredKey)
           setHasAnswered(!!alreadyAnswered)
           setSelectedAnswer(null)
+          
+          // Set question start time for time-based scoring (only if not already answered)
+          if (!alreadyAnswered) {
+            setQuestionStartTime(Date.now())
+          }
+          
           localStorage.setItem(`last_question_${updatedRoom.id}`, questionKey)
         }
       }
@@ -154,13 +161,22 @@ export default function PlayerRoom() {
     setSubmitting(true)
     setSelectedAnswer(choiceId)
 
+    // Calculate elapsed time in milliseconds
+    const elapsedMs = questionStartTime ? Date.now() - questionStartTime : 0
+    
+    console.log('👤 [PLAYER] Submitting answer:', {
+      choice: choiceId,
+      elapsedMs,
+      elapsedSeconds: (elapsedMs / 1000).toFixed(2)
+    })
+
     try {
       await submitAnswer({
         room_id: room.id,
         player_id: currentPlayer.id,
         question_id: currentQuestion.id,
         answer_choice_id: choiceId,
-        answer_time_ms: 15000, // TODO: Calculate actual time
+        answer_time_ms: elapsedMs,
       })
 
       setHasAnswered(true)
