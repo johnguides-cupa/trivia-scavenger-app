@@ -173,14 +173,21 @@ export default function PlayerRoom() {
           
           // Start 3-second countdown for new trivia questions (not for review)
           if (gameState?.status === 'trivia' && !alreadyAnswered) {
+            console.log('⏱️ [PLAYER] Starting countdown for new question')
             setShowCountdown(true)
             setCountdownValue(3)
+          } else {
+            // Make sure countdown is off if not starting new question
+            setShowCountdown(false)
           }
           
           // Timer will start when question finishes loading (in loadCurrentQuestion)
           // NOT here - this ensures each player's timer starts when THEY see the question
           
           localStorage.setItem(`last_question_${updatedRoom.id}`, questionKey)
+        } else {
+          // Same question as before - make sure countdown is off
+          setShowCountdown(false)
         }
       }
     }
@@ -418,10 +425,23 @@ export default function PlayerRoom() {
       // Countdown finished - show GO! for 500ms then hide
       const timer = setTimeout(() => {
         setShowCountdown(false)
+        console.log('✅ [PLAYER] Countdown finished')
       }, 500)
       return () => clearTimeout(timer)
     }
   }, [showCountdown, countdownValue])
+
+  // Failsafe: Force hide countdown after 5 seconds max (in case of issues)
+  useEffect(() => {
+    if (!showCountdown) return
+    
+    const failsafe = setTimeout(() => {
+      console.warn('⚠️ [PLAYER] Countdown failsafe triggered - forcing hide')
+      setShowCountdown(false)
+    }, 5000) // Force hide after 5 seconds
+    
+    return () => clearTimeout(failsafe)
+  }, [showCountdown])
 
   // Player heartbeat - update last_seen_at every 5 seconds
   useEffect(() => {
