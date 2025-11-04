@@ -730,7 +730,7 @@ export default function PlayerRoom() {
           </div>
         )}
 
-        {/* Trivia Review Phase - Show Correct Answer */}
+        {/* Trivia Review Phase - Just show question and choices (no correct answer shown) */}
         {!showContinueScreen && !hostDisconnected && isTriviaReview && currentQuestion && (
           <div className="space-y-6">
             <div className="card">
@@ -741,33 +741,28 @@ export default function PlayerRoom() {
                 <h2 className="text-2xl font-bold text-white mb-4">{currentQuestion.stem}</h2>
               </div>
 
+              {/* Show all choices without highlighting correct answer - host will show it on their screen */}
               <div className="space-y-3 mb-6">
                 {(currentQuestion.choices as any[])?.map((choice) => {
-                  const isCorrect = choice.is_correct
                   const wasSelected = selectedAnswer === choice.id
                   
                   return (
                     <div
                       key={choice.id}
                       className={`p-4 rounded-lg border-2 ${
-                        isCorrect
-                          ? 'border-green-500 bg-green-900/30'
-                          : wasSelected
-                          ? 'border-red-500 bg-red-900/30'
+                        wasSelected
+                          ? 'border-purple-500 bg-purple-900/30'
                           : 'border-gray-600 bg-gray-800/30'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className={`font-semibold ${
-                          isCorrect ? 'text-green-300' : wasSelected ? 'text-red-300' : 'text-gray-400'
+                          wasSelected ? 'text-purple-300' : 'text-gray-400'
                         }`}>
                           {choice.label}
                         </span>
-                        {isCorrect && (
-                          <span className="text-green-400 font-bold">✓ Correct</span>
-                        )}
-                        {!isCorrect && wasSelected && (
-                          <span className="text-red-400 font-bold">✗ Your Answer</span>
+                        {wasSelected && (
+                          <span className="text-purple-400 font-bold">Your Answer</span>
                         )}
                       </div>
                     </div>
@@ -776,7 +771,7 @@ export default function PlayerRoom() {
               </div>
 
               <div className="text-center py-6 bg-gray-700/30 rounded-lg">
-                <p className="text-gray-400">Waiting for host to start scavenger hunt...</p>
+                <p className="text-gray-400">Host is showing the correct answer...</p>
               </div>
             </div>
           </div>

@@ -802,10 +802,24 @@ export default function HostDashboard() {
                   </div>
                 </div>
 
-                <div className="bg-gray-700/50 rounded-lg p-12 mb-6 flex items-center justify-center min-h-[300px]">
-                  <p className="text-4xl font-bold text-white text-center leading-relaxed">
+                <div className="bg-gray-700/50 rounded-lg p-8 mb-6">
+                  <p className="text-3xl font-bold text-white text-center leading-relaxed mb-8">
                     {currentQuestion.stem}
                   </p>
+                  
+                  {/* Show all answer choices during trivia phase */}
+                  <div className="space-y-3 max-w-3xl mx-auto">
+                    {currentQuestion.choices?.map((choice: any) => (
+                      <div
+                        key={choice.id}
+                        className="p-5 rounded-lg border-2 border-gray-600 bg-gray-800/50"
+                      >
+                        <p className="text-xl font-semibold text-gray-200">
+                          {choice.label}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {questionLoadTime && currentTime - questionLoadTime < 5000 && (
