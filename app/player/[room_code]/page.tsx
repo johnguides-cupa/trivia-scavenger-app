@@ -158,17 +158,37 @@ export default function PlayerRoom() {
         console.log('👤 [PLAYER] Loading question:', { 
           roomId: updatedRoom.id, 
           round: gameState.current_round, 
-          question: gameState.current_question 
+          question: gameState.current_question,
+          status: gameState.status
         })
         
         loadCurrentQuestion(updatedRoom.id, gameState.current_round, gameState.current_question)
         // Reset answer state for new question
         const questionKey = `${gameState.current_round}-${gameState.current_question}`
         const lastQuestionKey = localStorage.getItem(`last_question_${updatedRoom.id}`)
-        if (questionKey !== lastQuestionKey) {
-          // New question - check if already answered
+        const lastPhase = localStorage.getItem(`last_phase_${updatedRoom.id}`)
+        
+        console.log('🔍 [PLAYER] Question check:', {
+          questionKey,
+          lastQuestionKey,
+          currentPhase: gameState.status,
+          lastPhase,
+          isNewQuestion: questionKey !== lastQuestionKey,
+          isPhaseChange: gameState.status !== lastPhase
+        })
+        
+        // Reset if it's a new question OR if we just entered trivia phase from another phase
+        if (questionKey !== lastQuestionKey || (gameState.status === 'trivia' && lastPhase !== 'trivia')) {
+          // New question or new trivia phase - check if already answered
           const hasAnsweredKey = `answered_${updatedRoom.id}_${questionKey}`
           const alreadyAnswered = localStorage.getItem(hasAnsweredKey)
+          
+          console.log('🔍 [PLAYER] Checking if already answered:', {
+            hasAnsweredKey,
+            alreadyAnswered,
+            willSetHasAnswered: !!alreadyAnswered
+          })
+          
           setHasAnswered(!!alreadyAnswered)
           setSelectedAnswer(null)
           setPointsEarned(null) // Reset points earned for new question
@@ -187,6 +207,7 @@ export default function PlayerRoom() {
           // NOT here - this ensures each player's timer starts when THEY see the question
           
           localStorage.setItem(`last_question_${updatedRoom.id}`, questionKey)
+          localStorage.setItem(`last_phase_${updatedRoom.id}`, gameState.status)
         } else {
           // Same question as before - make sure countdown is off
           setShowCountdown(false)
